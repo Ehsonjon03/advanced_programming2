@@ -1,23 +1,24 @@
 package usecase
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
+	"context"
+	"log"
 	"order-service/internal/domain"
 	"order-service/internal/repository"
+	"order-service/pkg/payment" // Твои скопированные файлы
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type OrderUseCase struct {
-	repo       *repository.OrderRepo
-	httpClient *http.Client
+	repo *repository.OrderRepo
 }
 
-func NewOrderUseCase(r *repository.OrderRepo, client *http.Client) *OrderUseCase {
+func NewOrderUseCase(r *repository.OrderRepo) *OrderUseCase {
 	return &OrderUseCase{
-		repo:       r,
-		httpClient: client,
+		repo: r,
 	}
 }
 
@@ -25,27 +26,43 @@ func (u *OrderUseCase) CreateOrder(ord domain.Order) (string, error) {
 	ord.Status = "Pending"
 	ord.CreatedAt = time.Now()
 
+	// 1. Сохраняем заказ в базу данных
 	if err := u.repo.Save(ord); err != nil {
 		return "", err
 	}
 
-	paymentReq, _ := json.Marshal(map[string]interface{}{
-		"order_id": ord.ID,
-		"amount":   ord.Amount,
+	// 2. Устанавливаем соединение с Payment Service (порт 50051)
+	// Используем insecure, так как у нас локальная разработка без SSL
+	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("Не удалось подключиться к Payment Service: %v", err)
+		return "Order created, but Payment Service is unreachable", nil
+	}
+	defer conn.Close()
+
+	// 3. Создаем gRPC клиент
+	client := payment.NewPaymentServiceClient(conn)
+
+	// 4. Вызываем метод ProcessPayment (как обычную функцию!)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	resp, err := client.ProcessPayment(ctx, &payment.PaymentRequest{
+		OrderId: ord.ID,
+		Amount:  ord.Amount,
 	})
 
-	resp, err := u.httpClient.Post("http://localhost:8081/payments", "application/json", bytes.NewBuffer(paymentReq))
 	if err != nil {
-		return "Failed: Payment Service timeout or error", nil
+		log.Printf("Ошибка при вызове gRPC: %v", err)
+		return "Order created, but payment failed", nil
 	}
-	defer resp.Body.Close()
 
-	return "Order created and processed", nil
+	// 5. Логируем результат от платежки
+	log.Printf("Payment Status: %s, Transaction ID: %s", resp.Status, resp.TransactionId)
+
+	return "Order created and processed via gRPC. Status: " + resp.Status, nil
 }
 
-// Добавил метод GetFilteredOrders.(Сейчас он просто вызывает репозиторий.)
-
 func (u *OrderUseCase) GetFilteredOrders(min, max int64) ([]domain.Order, error) {
-	
 	return u.repo.GetByAmountRange(min, max)
 }

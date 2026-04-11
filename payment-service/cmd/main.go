@@ -2,35 +2,44 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
+	"net"
 	"payment-service/internal/repository"
-	"payment-service/internal/transport/http"
+	"payment-service/internal/transport/grpc_handler"
 	"payment-service/internal/usecase"
 
-	"github.com/gin-gonic/gin"
-	_ "github.com/lib/pq" // Драйвер для Postgres
+	_ "github.com/lib/pq"
+	"google.golang.org/grpc"
+	"payment-service/pkg/payment"
 )
 
 func main() {
-	// Твой существующий код подключения к БД...
+	// 1. Подключение к БД
 	db, err := sql.Open("postgres", "user=zhuanz dbname=payment_db sslmode=disable")
-
-	// Собираем слои Чистой Архитектуры
-	repo := repository.NewPaymentRepo(db)
-	uc := usecase.NewPaymentUseCase(repo)
-	handler := http.NewPaymentHandler(uc)
-
-	r := gin.Default()
-
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Ошибка подключения к БД:", err)
 	}
 
-	// Настраиваем эндпоинты согласно заданию [cite: 88, 91]
-	r.POST("/payments", handler.CreatePayment)
+	// 2. Инициализация слоев
+	repo := repository.NewPaymentRepo(db)
+	uc := usecase.NewPaymentUseCase(repo)
+	// Используем наш новый gRPC Handler
+	handler := grpc_handler.NewPaymentGRPCHandler(uc)
 
-	// Запускаем сервис
-	fmt.Println("Payment Service запущен на порту :8081")
-	r.Run(":8081")
+	// 3. Создаем TCP слушатель на порту 50051
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("Ошибка при прослушивании порта: %v", err)
+	}
+
+	// 4. Создаем gRPC сервер
+	s := grpc.NewServer()
+	payment.RegisterPaymentServiceServer(s, handler)
+
+	log.Println("Payment gRPC Server запущен на порту :50051")
+
+	// 5. Запуск
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("Ошибка запуска сервера: %v", err)
+	}
 }
