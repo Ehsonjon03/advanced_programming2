@@ -1,27 +1,46 @@
-## Архитектура системы (gRPC)
-
-Ниже представлена схема взаимодействия сервисов через gRPC:
+## Архитектура системы (Микросервисы и gRPC)
 
 ```mermaid
-sequenceDiagram
-    participant Client as Postman / User
-    participant Order as Order Service (Port 8080)
-    participant DB1 as Order DB (PostgreSQL)
-    participant Payment as Payment Service (Port 50051)
-    participant DB2 as Payment DB (PostgreSQL)
+flowchart TD
+    %% Стиль для клиента
+    Client[("👤 Client / Postman")]
+    style Client fill:#f9f,stroke:#333,stroke-width:2px
 
-    Client->>Order: POST /orders (ID, Amount)
-    Order->>DB1: Сохранение заказа (Status: Pending)
-    
-    Note over Order,Payment: Общение через gRPC (Protobuf)
-    
-    Order->>Payment: gRPC: ProcessPayment(OrderID, Amount)
-    
-    alt Amount > 100,000
-        Payment-->>Order: gRPC Response (Status: Rejected)
-    else Amount <= 100,000
-        Payment->>DB2: Сохранение транзакции
-        Payment-->>Order: gRPC Response (Status: Authorized)
+    %% Order Service
+    subgraph OS ["📦 Order Service (Port: 8080)"]
+        direction TB
+        OH["🌐 HTTP Handler"]
+        OUC["🧠 Use Case"]
+        OR["🗄️ Repository"]
+        OGRPC["🔌 gRPC Client"]
     end
 
-    Order-->>Client: JSON Response (Order Created & Processed)
+    %% Payment Service
+    subgraph PS ["💳 Payment Service (Port: 50051)"]
+        direction TB
+        PH["⚙️ gRPC Handler"]
+        PUC["🧠 Use Case"]
+        PR["🗄️ Repository"]
+    end
+
+    %% Базы данных
+    ODB[("🛢️ Order DB")]
+    PDB[("🛢️ Payment DB")]
+
+    %% Связи
+    Client -->|POST /orders| OH
+    Client -->|GET /orders| OH
+    
+    OH --> OUC
+    OUC --> OR
+    OUC --> OGRPC
+    OR --> ODB
+
+    OGRPC -.->|gRPC Call| PH
+    PH --> PUC
+    PUC --> PR
+    PR --> PDB
+
+    %% Цвета для сервисов
+    style OS fill:#e1f5fe,stroke:#01579b
+    style PS fill:#f1f8e9,stroke:#33691e
