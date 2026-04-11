@@ -1,45 +1,27 @@
-### Architecture & Data Flow Diagram
+## Архитектура системы (gRPC)
+
+Ниже представлена схема взаимодействия сервисов через gRPC:
 
 ```mermaid
-graph TD
-    %% Nodes
-    Client[Client / Postman]
+sequenceDiagram
+    participant Client as Postman / User
+    participant Order as Order Service (Port 8080)
+    participant DB1 as Order DB (PostgreSQL)
+    participant Payment as Payment Service (Port 50051)
+    participant DB2 as Payment DB (PostgreSQL)
+
+    Client->>Order: POST /orders (ID, Amount)
+    Order->>DB1: Сохранение заказа (Status: Pending)
     
-    subgraph Order_Service [Order Service]
-        direction TB
-        OH[HTTP Handler]
-        OUC[Use Case]
-        OPG[HTTP Payment Gateway]
-        OPR[Postgres Repository]
+    Note over Order,Payment: Общение через gRPC (Protobuf)
+    
+    Order->>Payment: gRPC: ProcessPayment(OrderID, Amount)
+    
+    alt Amount > 100,000
+        Payment-->>Order: gRPC Response (Status: Rejected)
+    else Amount <= 100,000
+        Payment->>DB2: Сохранение транзакции
+        Payment-->>Order: gRPC Response (Status: Authorized)
     end
 
-    subgraph Payment_Service [Payment Service]
-        direction TB
-        PH[HTTP Handler]
-        PUC[Use Case]
-        PPR[Postgres Repository]
-    end
-
-    ODB[(Order DB)]
-    PDB[(Payment DB)]
-
-    %% Connections
-    Client -->|POST /orders| OH
-    Client -->|GET /orders?min_amount=X| OH
-    
-    OH --> OUC
-    OUC --> OPR
-    OUC --> OPG
-    OPR --> ODB
-
-    OPG -->|POST /payments| PH
-    
-    PH --> PUC
-    PUC --> PPR
-    PPR --> PDB
-
-    %% Styling
-    style Order_Service fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style Payment_Service fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style ODB fill:#e1f5fe,stroke:#01579b
-    style PDB fill:#e1f5fe,stroke:#01579b
+    Order-->>Client: JSON Response (Order Created & Processed)
