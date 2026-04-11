@@ -1,46 +1,36 @@
-## Архитектура проекта (gRPC Interaction)
+## Как работает мой проект
 
 ```mermaid
-flowchart TD
-    %% Пользователь
-    User[("👤 User / Postman")]
-    style User fill:#f9f,stroke:#333,stroke-width:2px
+graph TD
+    %% Внешний мир
+    Postman[("🚀 Postman / Browser")]
+    style Postman fill:#ff6c37,stroke:#333,color:#fff
 
-    %% Order Service
-    subgraph OrderService ["📦 Order Service (HTTP + gRPC Client)"]
-        direction TB
-        OH["🌐 Gin HTTP Handler"]
-        OUC["🧠 Order Use Case"]
-        OR["🗄️ Order Repository"]
-        OC["🔌 gRPC Client (Generated)"]
+    subgraph OrderApp ["📦 Order Service (Port 8080)"]
+        Gin["🌐 Gin Framework (HTTP)"]
+        OrderLogic["🧠 Business Logic"]
+        GRPC_Client["🔌 gRPC Client"]
     end
 
-    %% Payment Service
-    subgraph PaymentService ["💳 Payment Service (gRPC Server)"]
-        direction TB
-        PH["⚙️ gRPC Handler (Server)"]
-        PUC["🧠 Payment Use Case"]
-        PR["🗄️ Payment Repository"]
+    subgraph PaymentApp ["💳 Payment Service (Port 50051)"]
+        GRPC_Server["⚙️ gRPC Server"]
+        PayLogic["🧠 Payment Logic"]
     end
 
-    %% Базы данных
-    ODB[("🛢️ order_db")]
-    PDB[("🛢️ payment_db")]
+    %% Потоки
+    Postman -->|HTTP Request| Gin
+    Gin --> OrderLogic
+    OrderLogic -->|Call| GRPC_Client
 
-    %% Потоки данных
-    User -->|REST API: 8080| OH
-    OH --> OUC
-    OUC --> OR
-    OUC --> OC
-    OR --> ODB
+    %% Тот самый gRPC переход
+    GRPC_Client -.->|Protobuf / gRPC| GRPC_Server
 
-    %% gRPC Связь
-    OC -.->|gRPC Call: 50051| PH
-    
-    PH --> PUC
-    PUC --> PR
-    PR --> PDB
+    GRPC_Server --> PayLogic
 
-    %% Стили
-    style OrderService fill:#e3f2fd,stroke:#1565c0
-    style PaymentService fill:#fff3e0,stroke:#ef6c00
+    %% Базы
+    OrderLogic --- DB1[("🛢️ order_db")]
+    PayLogic --- DB2[("🛢️ payment_db")]
+
+    %% Стилизация
+    style OrderApp fill:#e1f5fe,stroke:#01579b
+    style PaymentApp fill:#fff3e0,stroke:#ef6c00
