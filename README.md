@@ -1,46 +1,46 @@
-## Архитектура системы (Микросервисы и gRPC)
+## Архитектура проекта (gRPC Interaction)
 
 ```mermaid
 flowchart TD
-    %% Стиль для клиента
-    Client[("👤 Client / Postman")]
-    style Client fill:#f9f,stroke:#333,stroke-width:2px
+    %% Пользователь
+    User[("👤 User / Postman")]
+    style User fill:#f9f,stroke:#333,stroke-width:2px
 
     %% Order Service
-    subgraph OS ["📦 Order Service (Port: 8080)"]
+    subgraph OrderService ["📦 Order Service (HTTP + gRPC Client)"]
         direction TB
-        OH["🌐 HTTP Handler"]
-        OUC["🧠 Use Case"]
-        OR["🗄️ Repository"]
-        OGRPC["🔌 gRPC Client"]
+        OH["🌐 Gin HTTP Handler"]
+        OUC["🧠 Order Use Case"]
+        OR["🗄️ Order Repository"]
+        OC["🔌 gRPC Client (Generated)"]
     end
 
     %% Payment Service
-    subgraph PS ["💳 Payment Service (Port: 50051)"]
+    subgraph PaymentService ["💳 Payment Service (gRPC Server)"]
         direction TB
-        PH["⚙️ gRPC Handler"]
-        PUC["🧠 Use Case"]
-        PR["🗄️ Repository"]
+        PH["⚙️ gRPC Handler (Server)"]
+        PUC["🧠 Payment Use Case"]
+        PR["🗄️ Payment Repository"]
     end
 
     %% Базы данных
-    ODB[("🛢️ Order DB")]
-    PDB[("🛢️ Payment DB")]
+    ODB[("🛢️ order_db")]
+    PDB[("🛢️ payment_db")]
 
-    %% Связи
-    Client -->|POST /orders| OH
-    Client -->|GET /orders| OH
-    
+    %% Потоки данных
+    User -->|REST API: 8080| OH
     OH --> OUC
     OUC --> OR
-    OUC --> OGRPC
+    OUC --> OC
     OR --> ODB
 
-    OGRPC -.->|gRPC Call| PH
+    %% gRPC Связь
+    OC -.->|gRPC Call: 50051| PH
+    
     PH --> PUC
     PUC --> PR
     PR --> PDB
 
-    %% Цвета для сервисов
-    style OS fill:#e1f5fe,stroke:#01579b
-    style PS fill:#f1f8e9,stroke:#33691e
+    %% Стили
+    style OrderService fill:#e3f2fd,stroke:#1565c0
+    style PaymentService fill:#fff3e0,stroke:#ef6c00
