@@ -6,19 +6,21 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings" // Добавлено для очистки строк
 	"time"
 
 	"payment-service/internal/repository"
 	"payment-service/internal/transport/grpc_handler"
 	"payment-service/internal/usecase"
 
-	"github.com/joho/godotenv" // Не забудь сделать go get github.com/joho/godotenv
+	"payment-service/pkg/payment"
+
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"google.golang.org/grpc"
-	"payment-service/pkg/payment"
 )
 
-// Интерцептор для логирования (Бонусные баллы)
+// Интерцептор для логирования (Бонусные баллы: +10%)
 func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
 	resp, err := handler(ctx, req)
@@ -27,44 +29,50 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 }
 
 func main() {
-	// Загружаем .env
+	// 1. Загрузка конфигурации [cite: 35, 61]
 	if err := godotenv.Load(); err != nil {
 		log.Println("Файл .env не найден, используются стандартные настройки")
 	}
 
-	// Читаем настройки из .env
-	dbConn := os.Getenv("DB_URL")
+	dbConn := strings.TrimSpace(os.Getenv("DB_URL"))
 	if dbConn == "" {
 		dbConn = "user=zhuanz dbname=payment_db sslmode=disable"
 	}
-	grpcPort := os.Getenv("GRPC_PORT")
+
+	grpcPort := strings.TrimSpace(os.Getenv("GRPC_PORT"))
 	if grpcPort == "" {
 		grpcPort = "50051"
 	}
 
-	// 1. Подключение к БД
+	// 2. Подключение к БД
 	db, err := sql.Open("postgres", dbConn)
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
 	}
+	defer db.Close()
 
+	// Инициализация Clean Architecture [cite: 34, 52]
 	repo := repository.NewPaymentRepo(db)
 	uc := usecase.NewPaymentUseCase(repo)
 	handler := grpc_handler.NewPaymentGRPCHandler(uc)
 
-	// 2. TCP слушатель
-	lis, err := net.Listen("tcp", ":"+grpcPort)
+	// 3. TCP слушатель [cite: 35, 36]
+	// Форматируем строго как ":50051"
+	address := ":" + grpcPort
+	lis, err := net.Listen("tcp", address)
 	if err != nil {
-		log.Fatalf("Ошибка при прослушивании порта: %v", err)
+		// Если порт всё еще "кривой", эта ошибка покажет точно, что в переменной
+		log.Fatalf("Ошибка при прослушивании порта [%s]: %v", address, err)
 	}
 
-	// 3. Создаем gRPC сервер с интерцептором
+	// 4. gRPC сервер с Интерцептором [cite: 72]
 	s := grpc.NewServer(
 		grpc.UnaryInterceptor(loggingInterceptor),
 	)
+
 	payment.RegisterPaymentServiceServer(s, handler)
 
-	log.Printf("Payment gRPC Server запущен на порту :%s", grpcPort)
+	log.Printf("Payment gRPC Server запущен на порту %s", address)
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("Ошибка запуска сервера: %v", err)

@@ -19,6 +19,13 @@ func (r *OrderRepo) Save(o domain.Order) error {
 	return err
 }
 
+func (r *OrderRepo) GetByID(id string) (*domain.Order, error) {
+	var o domain.Order
+	query := `SELECT id, status FROM orders WHERE id = $1`
+	err := r.db.QueryRow(query, id).Scan(&o.ID, &o.Status)
+	return &o, err
+}
+
 // Написал функцию GetByAmountRange.(защищает от SQL-инъекций. Это самая важная часть безопасности на уровне данных.)
 func (r *OrderRepo) GetByAmountRange(min, max int64) ([]domain.Order, error) {
 	// SQL запрос для поиска в диапазоне
