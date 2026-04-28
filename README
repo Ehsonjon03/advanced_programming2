@@ -1,44 +1,25 @@
-# Quick Start Guide
+# Assignment 3: Event-Driven Architecture (EDA) Implementation
 
-## 1. Database Setup
-Выполнить в psql:
-```sql
-CREATE DATABASE order_db;
-CREATE DATABASE payment_db;
+## Project Overview
+[cite_start]This project extends the previous gRPC-based system by implementing an asynchronous event-driven flow for notifications[cite: 14, 15, 17]. [cite_start]The core logic ensures that slow or unreliable notification processes are decoupled from the payment flow using **RabbitMQ**[cite: 16, 18, 20].
 
--- Таблица для order_db
-\c order_db
-CREATE TABLE orders (id TEXT PRIMARY KEY, customer_id TEXT, item_name TEXT, amount BIGINT, status TEXT, created_at TIMESTAMP);
+## Key Technical Features
 
--- Таблица для payment_db
-\c payment_db
-CREATE TABLE payments (id TEXT PRIMARY KEY, order_id TEXT, transaction_id TEXT, amount BIGINT, status TEXT);
-2. Running Services (Open 2 Terminals)
-Terminal 1 (Payment Service):
+### 1. Messaging Logic & Reliability (Lecture 5)
+* [cite_start]**Decoupling**: The Notification Service operates as an independent consumer and does not depend on direct gRPC/REST calls from other services[cite: 16, 27, 28].
+* **Manual Acknowledgments (ACKs)**: Auto-acknowledgment is disabled (`autoAck: false`). [cite_start]Messages are only acknowledged after the notification log is successfully printed, ensuring at-least-once delivery[cite: 20, 35, 43].
+* [cite_start]**Persistence**: The communication queue is declared as `durable`, and messages are marked as `persistent` to survive broker restarts[cite: 20, 36].
 
-Bash
-cd payment-service && go mod tidy && go run cmd/main.go
-Terminal 2 (Order Service):
+### 2. Idempotent Consumer (Lecture 6)
+* [cite_start]To prevent redundant processing of the same event, the Notification Service implements an **Idempotency Check**[cite: 21, 37, 45].
+* The service verifies the unique ID (order_id/transaction_id) before processing. [cite_start]If a message with the same ID arrives again, it is ignored, and no duplicate log is printed[cite: 37, 45].
 
-Bash
-cd order-service && go mod tidy && go run cmd/main.go
-3. Testing (Terminal 3)
-Success Test (Amount < 100k):
+### 3. Service Lifecycle & Docker
+* [cite_start]**Graceful Shutdown**: Every service implements a listener for `os/signal` (SIGTERM/SIGINT) to properly close database connections and RabbitMQ channels before exiting[cite: 20, 46].
+* [cite_start]**Orchestration**: The entire environment, including the Order Service, Payment Service, Notification Service, PostgreSQL, and RabbitMQ, is managed via a single `docker-compose.yml`[cite: 21, 39, 40].
 
-Bash
-curl -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{"id":"ord-01", "customer_id":"user-1", "item_name":"Monitor", "amount":70000}'
-Decline Test (Amount > 100k):
-
-Bash
-curl -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{"id":"ord-02", "customer_id":"user-1", "item_name":"iPhone", "amount":150000}'
-Timeout Test:
-Остановите Payment Service (Ctrl+C) и отправьте любой curl запрос. Через 2 секунды Order Service вернет ошибку таймаута.
-
-
----
-
-### Почему это удобно:
-1. **Ничего лишнего:** Преподаватель видит только команды.
-2. **Всё в одном:** Тебе не нужно искать команды по разным файлам или чатам.
-3. **Демонстрация таймаута:** Это самое важное требование ассайнмента, и в README четко написано, как это показать.
-
+## How to Run
+1. Navigate to the project root.
+2. Build and start the containers:
+   ```bash
+   docker-compose up --build
