@@ -5,7 +5,8 @@ import (
 	"log"
 	"order-service/internal/domain"
 	"order-service/internal/repository"
-	"order-service/pkg/payment" // Твои скопированные файлы
+	"order-service/pkg/payment"
+	"os" // Добавили для работы с переменными окружения
 	"time"
 
 	"google.golang.org/grpc"
@@ -31,11 +32,18 @@ func (u *OrderUseCase) CreateOrder(ord domain.Order) (string, error) {
 		return "", err
 	}
 
-	// 2. Устанавливаем соединение с Payment Service (порт 50051)
-	// Используем insecure, так как у нас локальная разработка без SSL
-	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 2. Устанавливаем соединение с Payment Service
+	// Берем адрес из переменной окружения (в docker-compose это payment-service:50051)
+	paymentAddr := os.Getenv("PAYMENT_SERVICE_ADDR")
+	if paymentAddr == "" {
+		paymentAddr = "localhost:50051" // Резервный вариант для локального запуска
+	}
+
+	log.Printf("Попытка подключения к Payment Service по адресу: %s", paymentAddr)
+
+	conn, err := grpc.Dial(paymentAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Printf("Не удалось подключиться к Payment Service: %v", err)
+		log.Printf("Не удалось подключиться к Payment Service (%s): %v", paymentAddr, err)
 		return "Order created, but Payment Service is unreachable", nil
 	}
 	defer conn.Close()
@@ -43,7 +51,7 @@ func (u *OrderUseCase) CreateOrder(ord domain.Order) (string, error) {
 	// 3. Создаем gRPC клиент
 	client := payment.NewPaymentServiceClient(conn)
 
-	// 4. Вызываем метод ProcessPayment (как обычную функцию!)
+	// 4. Вызываем метод ProcessPayment
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -53,7 +61,7 @@ func (u *OrderUseCase) CreateOrder(ord domain.Order) (string, error) {
 	})
 
 	if err != nil {
-		log.Printf("Ошибка при вызове gRPC: %v", err)
+		log.Printf("Ошибка при вызове gRPC на %s: %v", paymentAddr, err)
 		return "Order created, but payment failed", nil
 	}
 

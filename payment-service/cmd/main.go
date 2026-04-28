@@ -6,9 +6,12 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings" // Добавлено для очистки строк
+	"os/signal"
+	"strings"
+	"syscall"
 	"time"
 
+	"payment-service/internal/infrastructure"
 	"payment-service/internal/repository"
 	"payment-service/internal/transport/grpc_handler"
 	"payment-service/internal/usecase"
@@ -20,7 +23,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Интерцептор для логирования (Бонусные баллы: +10%)
 func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	start := time.Now()
 	resp, err := handler(ctx, req)
@@ -29,14 +31,15 @@ func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnarySe
 }
 
 func main() {
-	// 1. Загрузка конфигурации [cite: 35, 61]
 	if err := godotenv.Load(); err != nil {
-		log.Println("Файл .env не найден, используются стандартные настройки")
+		log.Println("Файл .env не найден, используются переменные окружения")
 	}
 
 	dbConn := strings.TrimSpace(os.Getenv("DB_URL"))
 	if dbConn == "" {
-		dbConn = "user=zhuanz dbname=payment_db sslmode=disable"
+		// Замени на строку подключения для Docker
+		// Было: user=zhuanz dbname=payment_db
+		dbConn = "postgres://zhuanz:password@postgres:5432/payment_db?sslmode=disable"
 	}
 
 	grpcPort := strings.TrimSpace(os.Getenv("GRPC_PORT"))
@@ -44,37 +47,74 @@ func main() {
 		grpcPort = "50051"
 	}
 
-	// 2. Подключение к БД
+	rabbitURL := os.Getenv("RABBIT_URL") // Было RABBITMQ_URL в коде
+	if rabbitURL == "" {
+		rabbitURL = "amqp://guest:guest@rabbitmq:5672/"
+	}
+
+	// 1. Подключение к БД
 	db, err := sql.Open("postgres", dbConn)
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
 	}
-	defer db.Close()
 
-	// Инициализация Clean Architecture [cite: 34, 52]
+	// 2. Инициализация RabbitMQ Producer
+	producer, err := infrastructure.NewRabbitMQProducer(rabbitURL)
+	if err != nil {
+		log.Printf("Предупреждение: не удалось подключиться к RabbitMQ: %v", err)
+	}
+
+	// 3. Инициализация слоев
 	repo := repository.NewPaymentRepo(db)
-	uc := usecase.NewPaymentUseCase(repo)
+	uc := usecase.NewPaymentUseCase(repo, producer)
 	handler := grpc_handler.NewPaymentGRPCHandler(uc)
 
-	// 3. TCP слушатель [cite: 35, 36]
-	// Форматируем строго как ":50051"
 	address := ":" + grpcPort
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
-		// Если порт всё еще "кривой", эта ошибка покажет точно, что в переменной
 		log.Fatalf("Ошибка при прослушивании порта [%s]: %v", address, err)
 	}
 
-	// 4. gRPC сервер с Интерцептором [cite: 72]
 	s := grpc.NewServer(
 		grpc.UnaryInterceptor(loggingInterceptor),
 	)
-
 	payment.RegisterPaymentServiceServer(s, handler)
 
-	log.Printf("Payment gRPC Server запущен на порту %s", address)
+	// --- GRACEFUL SHUTDOWN LOGIC START ---
 
-	if err := s.Serve(lis); err != nil {
-		log.Fatalf("Ошибка запуска сервера: %v", err)
+	// Канал для прослушивания сигналов прерывания от ОС
+	quit := make(chan os.Signal, 1)
+	// SIGINT - это Ctrl+C, SIGTERM - сигнал на завершение от Docker/Kubernetes
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	// Запускаем сервер в отдельной горутине, чтобы он не блокировал основной поток
+	go func() {
+		log.Printf("Payment gRPC Server запущен на порту %s", address)
+		if err := s.Serve(lis); err != nil {
+			log.Printf("Сервер остановлен: %v", err)
+		}
+	}()
+
+	// Программа "замирает" здесь, пока не получит сигнал из канала quit
+	sig := <-quit
+	log.Printf("Получен сигнал завершения (%v). Начинаем Graceful Shutdown...", sig)
+
+	// Даем серверу 5 секунд на то, чтобы завершить текущие запросы
+	s.GracefulStop()
+	log.Println("gRPC сервер успешно остановлен.")
+
+	// Закрываем соединение с RabbitMQ
+	if producer != nil {
+		producer.Close()
+		log.Println("Соединение с RabbitMQ закрыто.")
 	}
+
+	// Закрываем соединение с БД
+	if err := db.Close(); err != nil {
+		log.Printf("Ошибка при закрытии БД: %v", err)
+	} else {
+		log.Println("Соединение с БД закрыто.")
+	}
+
+	log.Println("Payment Service полностью остановлен.")
 }

@@ -1,0 +1,64 @@
+services:
+  # 1. Брокер сообщений (RabbitMQ)
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. База данных (Общая для сервисов)
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      POSTGRES_USER: zhuanz
+      POSTGRES_DB: payment_db
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+
+  # 3. Payment Service (gRPC Server + RabbitMQ Producer)
+  payment-service:
+    build: ./payment-service
+    container_name: payment-service
+    ports:
+      - "50051:50051"  # ДОБАВЬ ЭТУ СТРОКУ, чтобы Postman мог достучаться
+    environment:
+      DB_URL: "postgres://zhuanz:password@postgres:5432/payment_db?sslmode=disable"
+      RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_started
+
+  # 4. Notification Service (RabbitMQ Consumer)
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    environment:
+      RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # 5. Order Service (HTTP API + gRPC Client)
+  order-service:
+    build: ./order-service
+    container_name: order-service
+    ports:
+      - "8081:8080"
+    environment:
+      DB_URL: "postgres://zhuanz:password@postgres:5432/payment_db?sslmode=disable"
+      HTTP_PORT: "8080"
+      # КЛЮЧЕВАЯ ПРАВКА: теперь сервис знает, что платежка на хосте payment-service
+      PAYMENT_SERVICE_ADDR: "payment-service:50051"
+    depends_on:
+      - postgres
+      - payment-service
