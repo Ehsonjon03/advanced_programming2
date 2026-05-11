@@ -23,12 +23,24 @@ services:
     ports:
       - "5432:5432"
 
-  # 3. Payment Service (gRPC Server + RabbitMQ Producer)
+  # 3. Кэш и хранилище состояний (НОВОЕ для Assignment 4)
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 4. Payment Service (gRPC Server + RabbitMQ Producer)
   payment-service:
     build: ./payment-service
     container_name: payment-service
     ports:
-      - "50051:50051"  # ДОБАВЬ ЭТУ СТРОКУ, чтобы Postman мог достучаться
+      - "50051:50051"
     environment:
       DB_URL: "postgres://zhuanz:password@postgres:5432/payment_db?sslmode=disable"
       RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
@@ -38,17 +50,22 @@ services:
       postgres:
         condition: service_started
 
-  # 4. Notification Service (RabbitMQ Consumer)
+  # 5. Notification Service (Background Worker + Adapter + Retries)
   notification-service:
     build: ./notification-service
     container_name: notification-service
     environment:
       RABBIT_URL: "amqp://guest:guest@rabbitmq:5672/"
+      REDIS_ADDR: "redis:6379" # Для идемпотентности заданий
+      PROVIDER_MODE: "SIMULATED" # Режим: REAL или SIMULATED
+      MAX_RETRIES: 3 # Максимальное количество попыток
     depends_on:
       rabbitmq:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  # 5. Order Service (HTTP API + gRPC Client)
+  # 6. Order Service (HTTP API + gRPC Client + Redis Caching)
   order-service:
     build: ./order-service
     container_name: order-service
@@ -57,8 +74,10 @@ services:
     environment:
       DB_URL: "postgres://zhuanz:password@postgres:5432/payment_db?sslmode=disable"
       HTTP_PORT: "8080"
-      # КЛЮЧЕВАЯ ПРАВКА: теперь сервис знает, что платежка на хосте payment-service
       PAYMENT_SERVICE_ADDR: "payment-service:50051"
+      REDIS_ADDR: "redis:6379" # Для паттерна Cache-aside
+      CACHE_TTL: "300s" # Время жизни кэша (5 минут)
     depends_on:
       - postgres
       - payment-service
+      - redis

@@ -4,10 +4,10 @@ import (
 	"log"
 	"time"
 
+	"order-service/internal/generated/order"
 	"order-service/internal/repository"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"order-service/internal/generated/order" // Твой сгенерированный код
 )
 
 type OrderStreamHandler struct {
@@ -23,28 +23,29 @@ func (h *OrderStreamHandler) SubscribeToOrderUpdates(req *order.OrderRequest, st
 	lastStatus := ""
 	log.Printf("Клиент подписался на обновления заказа: %s", req.OrderId)
 
+	// Извлекаем контекст из gRPC стрима
+	ctx := stream.Context()
+
 	for {
-		// Проверка на закрытие соединения клиентом
 		select {
-		case <-stream.Context().Done():
+		case <-ctx.Done():
 			log.Printf("Клиент отключился от заказа: %s", req.OrderId)
 			return nil
 		default:
-			// ЧИТАЕМ ИЗ БД (Критическое требование задания)
-			// Убедись, что метод GetByID возвращает актуальный статус
-			ord, err := h.repo.GetByID(req.OrderId)
+			// Читаем данные через репозиторий (который использует кэш и БД)
+			ord, err := h.repo.GetByID(ctx, req.OrderId)
 			if err != nil {
-				log.Printf("Ошибка получения данных из БД: %v", err)
+				log.Printf("Ошибка получения данных: %v", err)
 				time.Sleep(5 * time.Second)
 				continue
 			}
 
-			// Если статус изменился — пушим в стрим [cite: 44]
+			// Если статус изменился со времени последней проверки — отправляем клиенту
 			if ord.Status != lastStatus {
 				err := stream.Send(&order.OrderStatusUpdate{
 					OrderId:   ord.ID,
 					Status:    ord.Status,
-					UpdatedAt: timestamppb.Now(), // Соответствие google.protobuf.Timestamp
+					UpdatedAt: timestamppb.Now(),
 				})
 				if err != nil {
 					return err
@@ -53,7 +54,7 @@ func (h *OrderStreamHandler) SubscribeToOrderUpdates(req *order.OrderRequest, st
 				log.Printf("Статус заказа %s изменен на: %s", ord.ID, ord.Status)
 			}
 
-			// Проверяем каждые 2 секунды (не слишком часто, чтобы не грузить БД)
+			// Опрос раз в 2 секунды
 			time.Sleep(2 * time.Second)
 		}
 	}
